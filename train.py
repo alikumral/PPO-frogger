@@ -24,6 +24,7 @@ class PreviewCallback(BaseCallback):
     def __init__(
         self,
         max_steps: int,
+        env_profile: str,
         preview_mode: str = "ansi",
         preview_freq: int = 50_000,
         sleep: float = 0.08,
@@ -32,6 +33,7 @@ class PreviewCallback(BaseCallback):
     ) -> None:
         super().__init__(verbose=verbose)
         self.max_steps = max_steps
+        self.env_profile = env_profile
         self.preview_mode = preview_mode
         self.preview_freq = max(preview_freq, 1)
         self.sleep = max(sleep, 0.0)
@@ -45,6 +47,7 @@ class PreviewCallback(BaseCallback):
             max_steps=self.max_steps,
             render_mode=self.preview_mode,
             render_fps=self.preview_render_fps,
+            env_profile=self.env_profile,
         )
 
     def _on_step(self) -> bool:
@@ -108,6 +111,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-envs", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=200)
+    parser.add_argument(
+        "--env-profile",
+        type=str,
+        default="v1_classic",
+        choices=["v1_classic", "v2_arcade"],
+        help="Environment profile to train on.",
+    )
+    parser.add_argument(
+        "--ent-coef",
+        type=float,
+        default=None,
+        help="Override PPO entropy coefficient. Defaults: 0.01(v1), 0.015(v2).",
+    )
     parser.add_argument("--models-dir", type=Path, default=Path("models"))
     parser.add_argument("--log-dir", type=Path, default=Path("runs"))
     parser.add_argument(
@@ -143,9 +159,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_env(max_steps: int):
+def build_env(max_steps: int, env_profile: str):
     def _init():
-        env = gym.make("FroggerLite-v0", max_steps=max_steps)
+        env = gym.make(
+            "FroggerLite-v0",
+            max_steps=max_steps,
+            env_profile=env_profile,
+        )
         return Monitor(env)
 
     return _init
@@ -158,12 +178,21 @@ def main() -> None:
     args.log_dir.mkdir(parents=True, exist_ok=True)
 
     vec_env = make_vec_env(
-        build_env(args.max_steps),
+        build_env(args.max_steps, args.env_profile),
         n_envs=args.n_envs,
         seed=args.seed,
     )
 
-    eval_env = Monitor(gym.make("FroggerLite-v0", max_steps=args.max_steps))
+    eval_env = Monitor(
+        gym.make(
+            "FroggerLite-v0",
+            max_steps=args.max_steps,
+            env_profile=args.env_profile,
+        )
+    )
+    ent_coef = args.ent_coef
+    if ent_coef is None:
+        ent_coef = 0.015 if args.env_profile == "v2_arcade" else 0.01
 
     model = PPO(
         policy="MlpPolicy",
@@ -175,7 +204,7 @@ def main() -> None:
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.01,
+        ent_coef=ent_coef,
         vf_coef=0.5,
         max_grad_norm=0.5,
         tensorboard_log=str(args.log_dir),
@@ -198,6 +227,7 @@ def main() -> None:
         callbacks.append(
             PreviewCallback(
                 max_steps=args.max_steps,
+                env_profile=args.env_profile,
                 preview_mode=args.preview_mode,
                 preview_freq=args.preview_freq,
                 sleep=args.preview_sleep,
@@ -211,7 +241,7 @@ def main() -> None:
 
     model.learn(total_timesteps=args.total_timesteps, callback=callback)
 
-    final_path = args.models_dir / "ppo_frogger_lite_final"
+    final_path = args.models_dir / f"ppo_frogger_lite_{args.env_profile}_final"
     model.save(str(final_path))
 
     vec_env.close()

@@ -1,0 +1,5 @@
+numpy>=1.26,<3
+gymnasium==0.29.1
+stable-baselines3[extra]==2.3.2
+torch>=2.2
+pygame>=2.5
